@@ -12,7 +12,7 @@ import pickle
 #     pickle.dump(object, file)
 
 default_data_path = {
-    "200MB": "/Users/luciaeve/PycharmProjects/cloud_cast_experiments/exp/data/",
+    "200MB": "/Users/luciaeve/Desktop/",
     "8GB": "/miniscratch/tyz/datasets/CloudCast/8GB/pkls/",
 }
 

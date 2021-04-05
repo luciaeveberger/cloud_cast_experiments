@@ -1,4 +1,8 @@
+# activate your virtualenv > will need to change!
+source /Users/luciaeve/PycharmProjects/predrnn-pytorch/venv/bin/activate
+
 python -u run.py \
+    --epochs 10 \
     --is_training 1 \
     --device cpu \
     --dataset_name cloud_cast \

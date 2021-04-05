@@ -11,6 +11,7 @@ loss_fn_alex = lpips.LPIPS(net='alex')
 
 
 def train(model, ims, real_input_flag, configs, itr):
+    print("input")
     cost = model.train(ims, real_input_flag)
     if configs.reverse_input:
         ims_rev = np.flip(ims, axis=1).copy()

@@ -27,6 +27,7 @@ parser.add_argument('--input_length', type=int, default=10)
 parser.add_argument('--total_length', type=int, default=20)
 parser.add_argument('--img_width', type=int, default=128)
 parser.add_argument('--img_channel', type=int, default=1)
+parser.add_argument('--epochs', type=int, default=10)
 
 # model
 parser.add_argument('--model_name', type=str, default='predrnn')
@@ -206,29 +207,33 @@ def cloud_cast_wrapper(model):
         batchsize=8,
     )
     trainLoader = torch.utils.data.DataLoader(
-        trainFolder, batch_size=16, num_workers=0, shuffle=False
+        trainFolder, batch_size=8, num_workers=0, shuffle=False
     )
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    # device may need to change
+    device = torch.device("gpu:0" if torch.cuda.is_available() else "cpu")
 
-    for epoch in range(1, 10):
-        t = tqdm(trainLoader, leave=False, total=len(trainLoader))
-        for i, (idx, targetVar, inputVar, _, _) in enumerate(t):
-            print(inputVar.shape)
+    for epoch in range(0, int(args.epochs)):
+        t = tqdm(trainLoader, leave=False, total=10)
+        for i, (idx, targetVar, inputVar, _, _) in enumerate(trainLoader):
             inputs = inputVar.to(device)
             inputs = torch.swapaxes(inputs, 2, 4)
             if args.reverse_scheduled_sampling == 1:
-                real_input_flag = reserve_schedule_sampling_exp(epoch)
+                real_input_flag = reserve_schedule_sampling_exp(i)
             ims = preprocess.reshape_patch(inputs, args.patch_size)
-            trainer.train(model, inputs, real_input_flag, args, idx)
-            break
+            print(ims.shape)
+            output = trainer.train(model, ims, real_input_flag, args, idx)
+            print(output)
+
+    if epoch % args.snapshot_interval == 0:
+            model.save(epoch)
 
 #
-# def test_wrapper(model):
-#     model.load(args.pretrained_model)
-#     test_input_handle = datasets_factory.data_provider(
-#         args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
-#         seq_length=args.total_length, is_training=False)
-#     trainer.test(model, test_input_handle, args, 'test_result')
+def test_wrapper(model):
+    model.load(args.pretrained_model)
+    test_input_handle = datasets_factory.data_provider(
+        args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
+        seq_length=args.total_length, is_training=False)
+    trainer.test(model, test_input_handle, args, 'test_result')
 
 
 if os.path.exists(args.save_dir):
