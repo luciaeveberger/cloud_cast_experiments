@@ -211,19 +211,15 @@ def cloud_cast_wrapper(model):
     )
     # device may need to change
     device = torch.device("gpu:0" if torch.cuda.is_available() else "cpu")
-
+    t = tqdm(trainLoader, leave=False, total=len(trainLoader))
     for epoch in range(0, int(args.epochs)):
-        t = tqdm(trainLoader, leave=False, total=10)
-        for i, (idx, targetVar, inputVar, _, _) in enumerate(trainLoader):
+        for i, (idx, targetVar, inputVar, _, _) in enumerate(t):
             inputs = inputVar.to(device)
             inputs = torch.swapaxes(inputs, 2, 4)
             if args.reverse_scheduled_sampling == 1:
                 real_input_flag = reserve_schedule_sampling_exp(i)
             ims = preprocess.reshape_patch(inputs, args.patch_size)
-            print(ims.shape)
-            output = trainer.train(model, ims, real_input_flag, args, idx)
-            print(output)
-
+            trainer.train(model, ims, real_input_flag, args, idx)
     if epoch % args.snapshot_interval == 0:
             model.save(epoch)
 
@@ -254,6 +250,6 @@ eta = args.sampling_start_value
 if args.dataset_name == 'cloud_cast':
     print("Training cloud cast")
     cloud_cast_wrapper(model)
-else:
-    train_wrapper(model)
+# else:
+#     train_wrapper(model)
 
