@@ -6,8 +6,8 @@ python -u run.py \
     --is_training 1 \
     --device cpu \
     --dataset_name cloud_cast \
-    --save_dir checkpoints/mnist_predrnn_v2 \
-    --gen_frm_dir results/mnist_predrnn_v2 \
+    --save_dir checkpoints/cloud_cast_predrnn \
+    --gen_frm_dir results/cloud_cast_predrnn \
     --model_name predrnn_memory_decoupling \
     --reverse_input 1 \
     --img_width 128 \
