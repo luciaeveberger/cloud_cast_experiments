@@ -28,6 +28,8 @@ parser.add_argument('--total_length', type=int, default=20)
 parser.add_argument('--img_width', type=int, default=128)
 parser.add_argument('--img_channel', type=int, default=1)
 parser.add_argument('--epochs', type=int, default=10)
+parser.add_argument('--number_of_workers', type=int, default=0)
+
 
 # model
 parser.add_argument('--model_name', type=str, default='predrnn')
@@ -166,7 +168,9 @@ def test(model, configs, itr):
     from data.cloudcast import CloudCast
     import torch
     import lpips
-    from skimage.measure import compare_ssim
+    from skimage.metrics import structural_similarity
+    #from skimage.measure import compare_ssim
+    #import skimage.measure
     from core.utils import preprocess, metrics
     import cv2
     from tqdm import tqdm
@@ -179,15 +183,15 @@ def test(model, configs, itr):
     img_mse, ssim, psnr = [], [], []
     lp = []
     testFolder = CloudCast(
-        is_train=True,
+        is_train=False,
         root="data/",
         n_frames_input=20,
         n_frames_output=1,
         batchsize=8,
     )
-
+    # number of workers will need to be changed
     testLoader = torch.utils.data.DataLoader(
-        testFolder, batch_size=8, num_workers=0, shuffle=False
+        testFolder, batch_size=8, num_workers=configs.number_of_workers, shuffle=False
     )
     t_test = tqdm(testLoader, leave=False, total=2)
 
@@ -263,7 +267,10 @@ def test(model, configs, itr):
 
             psnr[i] += metrics.batch_psnr(pred_frm, real_frm)
             for b in range(configs.batch_size):
-                score, _ = compare_ssim(pred_frm[b], real_frm[b], full=True, multichannel=True)
+                #score = 10
+                # original method is depricated
+                score, _ = structural_similarity(
+                    pred_frm[b], real_frm[b], full=True, multichannel=True)
                 ssim[i] += score
 
         # save prediction examples
@@ -319,28 +326,15 @@ def cloud_cast_wrapper(model):
     )
 
     trainLoader = torch.utils.data.DataLoader(
-        trainFolder, batch_size=8, num_workers=0, shuffle=False
-    )
-
-    testFolder = CloudCast(
-        is_train=True,
-        root="data/",
-        n_frames_input=20,
-        n_frames_output=1,
-        batchsize=8,
-    )
-
-    testLoader = torch.utils.data.DataLoader(
-        testFolder, batch_size=8, num_workers=0, shuffle=False
+        trainFolder, batch_size=8,
+        num_workers=args.number_of_workers,
+        shuffle=False
     )
 
     # device may need to change
     device = torch.device("gpu:0" if torch.cuda.is_available() else "cpu")
     t = tqdm(trainLoader, leave=False, total=2)
-    t_test = tqdm(testLoader, leave=False, total=2)
-
     for epoch in range(0, int(args.epochs)):
-        test(model, args, epoch)
         train_loss = 0
         for i, (idx, targetVar, inputVar, _, _) in enumerate(t):
             inputs = inputVar.to(device)
@@ -350,28 +344,20 @@ def cloud_cast_wrapper(model):
             ims = preprocess.reshape_patch(inputs, args.patch_size)
             loss = model.train(ims, real_input_flag)
             train_loss += loss.item()
+            print(train_loss)
+            # need to add comet
             #comet.log_metric("train_loss", train_loss / len(args.epoch), epoch=epoch)
+        #   runs and generates the validation at each epoch
 
-        for i, (idx, targetVar, inputVar, _, _) in enumerate(t_test):
-            inputs = inputVar.to(device)
-            inputs = torch.swapaxes(inputs, 2, 4)
-            pred = model(inputs)
-            #loss =
+        model.save(epoch)
+        test(model, args, epoch)
 
-
-
-
-    if epoch % args.snapshot_interval == 0:
-            model.save(epoch)
-
-
-
-def test_wrapper(model):
-    model.load(args.pretrained_model)
-    test_input_handle = datasets_factory.data_provider(
-        args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
-        seq_length=args.total_length, is_training=False)
-    trainer.test(model, test_input_handle, args, 'test_result')
+# def test_wrapper(model):
+#     model.load(args.pretrained_model)
+#     test_input_handle = datasets_factory.data_provider(
+#         args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
+#         seq_length=args.total_length, is_training=False)
+#     trainer.test(model, test_input_handle, args, 'test_result')
 
 
 if os.path.exists(args.save_dir):

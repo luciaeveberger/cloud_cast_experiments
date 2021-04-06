@@ -29,4 +29,6 @@ python -u run.py \
     --max_iterations 80000 \
     --display_interval 100 \
     --test_interval 5000 \
-    --snapshot_interval 5000 \
+    --snapshot_interval 300 \
+    --number_of_workers 0
+    \

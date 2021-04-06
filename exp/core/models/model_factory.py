@@ -22,10 +22,10 @@ class Model(object):
 
         self.optimizer = Adam(self.network.parameters(), lr=configs.lr)
 
-    def save(self, itr):
+    def save(self, itr, batch):
         stats = {}
         stats['net_param'] = self.network.state_dict()
-        checkpoint_path = os.path.join(self.configs.save_dir, 'model.ckpt'+'-'+str(itr))
+        checkpoint_path = os.path.join(self.configs.save_dir, 'model.ckpt'+'-'+str(itr) + '-'+str(batch))
         torch.save(stats, checkpoint_path)
         print("save model to %s" % checkpoint_path)
 
