@@ -35,11 +35,14 @@ class Model(object):
         self.network.load_state_dict(stats['net_param'])
 
     def train(self, frames, mask):
+        print("here")
         frames_tensor = torch.FloatTensor(frames).to(self.configs.device)
         mask_tensor = torch.FloatTensor(mask).to(self.configs.device)
         self.optimizer.zero_grad()
         next_frames, loss = self.network(frames_tensor, mask_tensor)
         loss.backward()
+        print(loss)
+        print(next_frames)
         self.optimizer.step()
         return loss.detach().cpu().numpy()
 

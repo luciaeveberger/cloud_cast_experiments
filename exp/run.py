@@ -66,7 +66,7 @@ parser.add_argument('--visual', type=int, default=0)
 parser.add_argument('--visual_path', type=str, default='./decoupling_visual')
 
 args = parser.parse_args()
-print(args)
+
 
 
 def reserve_schedule_sampling_exp(itr):
@@ -162,43 +162,154 @@ def schedule_sampling(eta, itr):
     return eta, real_input_flag
 
 
-def train_wrapper(model):
-    # if args.pretrained_model:
-    #     model.load(args.pretrained_model)
-    # load data
-    train_input_handle, test_input_handle = datasets_factory.data_provider(
-        args.dataset_name, args.train_data_paths, args.valid_data_paths, args.batch_size, args.img_width,
-        seq_length=args.total_length, is_training=True)
+def test(model, configs, itr):
+    from data.cloudcast import CloudCast
+    import torch
+    import lpips
+    from skimage.measure import compare_ssim
+    from core.utils import preprocess, metrics
+    import cv2
+    from tqdm import tqdm
+    loss_fn_alex = lpips.LPIPS(net='alex')
+    device = torch.device("gpu:0" if torch.cuda.is_available() else "cpu")
+    res_path = os.path.join(configs.gen_frm_dir, str(itr))
+    os.mkdir(res_path)
+    avg_mse = 0
+    batch_id = 0
+    img_mse, ssim, psnr = [], [], []
+    lp = []
+    testFolder = CloudCast(
+        is_train=True,
+        root="data/",
+        n_frames_input=20,
+        n_frames_output=1,
+        batchsize=8,
+    )
 
-    eta = args.sampling_start_value
+    testLoader = torch.utils.data.DataLoader(
+        testFolder, batch_size=8, num_workers=0, shuffle=False
+    )
+    t_test = tqdm(testLoader, leave=False, total=2)
 
-    for itr in range(1, args.max_iterations + 1):
-        if train_input_handle.no_batch_left():
-            train_input_handle.begin(do_shuffle=True)
+    for i in range(configs.total_length - configs.input_length):
+        img_mse.append(0)
+        ssim.append(0)
+        psnr.append(0)
+        lp.append(0)
 
-        ims = train_input_handle.get_batch()
-        print("Raw batched {}".format(ims.shape))
-        ims = preprocess.reshape_patch(ims, args.patch_size)
-        print("Preprocessed {}".format(ims.shape))
-        if args.reverse_scheduled_sampling == 1:
-            real_input_flag = reserve_schedule_sampling_exp(itr)
-        else:
-            eta, real_input_flag = schedule_sampling(eta, itr)
-        print("*** HEREE***{}".format(ims.shape))
-        trainer.train(model, ims, real_input_flag, args, itr)
-        if itr % args.snapshot_interval == 0:
-            model.save(itr)
+    # reverse schedule sampling
+    if configs.reverse_scheduled_sampling == 1:
+        mask_input = 1
+    else:
+        mask_input = configs.input_length
 
-        if itr % args.test_interval == 0:
-            trainer.test(model, test_input_handle, args, itr)
-        print("next rang")
-        train_input_handle.next()
+    real_input_flag = np.zeros(
+        (configs.batch_size,
+         configs.total_length - mask_input - 1,
+         configs.img_width // configs.patch_size,
+         configs.img_width // configs.patch_size,
+         configs.patch_size ** 2 * configs.img_channel))
+
+    if configs.reverse_scheduled_sampling == 1:
+        real_input_flag[:, :configs.input_length - 1, :, :] = 1.0
+
+    for i, (idx, targetVar, inputVar, _, _) in enumerate(t_test):
+        batch_id = batch_id + 1
+        inputs = inputVar.to(device)
+        test_ims = torch.swapaxes(inputs, 2, 4)
+        test_dat = preprocess.reshape_patch(test_ims, configs.patch_size)
+        img_gen = model.test(test_dat, real_input_flag)
+
+        img_gen = preprocess.reshape_patch_back(img_gen, configs.patch_size)
+        output_length = configs.total_length - configs.input_length
+        img_gen_length = img_gen.shape[1]
+        img_out = img_gen[:, -output_length:]
+
+        # MSE per frame
+        for i in range(output_length):
+            x = test_ims[:, i + configs.input_length, :, :, :]
+            gx = img_out[:, i, :, :, :]
+            gx = np.maximum(gx, 0)
+            gx = np.minimum(gx, 1)
+            mse = np.square(x - gx).sum()
+            img_mse[i] += mse
+            avg_mse += mse
+            # cal lpips
+            img_x = np.zeros([configs.batch_size, 3, configs.img_width, configs.img_width])
+            if configs.img_channel == 3:
+                img_x[:, 0, :, :] = x[:, :, :, 0]
+                img_x[:, 1, :, :] = x[:, :, :, 1]
+                img_x[:, 2, :, :] = x[:, :, :, 2]
+            else:
+                img_x[:, 0, :, :] = x[:, :, :, 0]
+                img_x[:, 1, :, :] = x[:, :, :, 0]
+                img_x[:, 2, :, :] = x[:, :, :, 0]
+            img_x = torch.FloatTensor(img_x)
+            img_gx = np.zeros([configs.batch_size, 3, configs.img_width, configs.img_width])
+            if configs.img_channel == 3:
+                img_gx[:, 0, :, :] = gx[:, :, :, 0]
+                img_gx[:, 1, :, :] = gx[:, :, :, 1]
+                img_gx[:, 2, :, :] = gx[:, :, :, 2]
+            else:
+                img_gx[:, 0, :, :] = gx[:, :, :, 0]
+                img_gx[:, 1, :, :] = gx[:, :, :, 0]
+                img_gx[:, 2, :, :] = gx[:, :, :, 0]
+            img_gx = torch.FloatTensor(img_gx)
+            lp_loss = loss_fn_alex(img_x, img_gx)
+            lp[i] += torch.mean(lp_loss).item()
+
+            real_frm = np.uint8(x * 255)
+            pred_frm = np.uint8(gx * 255)
+
+            psnr[i] += metrics.batch_psnr(pred_frm, real_frm)
+            for b in range(configs.batch_size):
+                score, _ = compare_ssim(pred_frm[b], real_frm[b], full=True, multichannel=True)
+                ssim[i] += score
+
+        # save prediction examples
+        if batch_id <= configs.num_save_samples:
+            path = os.path.join(res_path, str(batch_id))
+            os.mkdir(path)
+            for i in range(configs.total_length):
+                name = 'gt' + str(i + 1) + '.png'
+                file_name = os.path.join(path, name)
+                img_gt = np.uint8(test_ims[0, i, :, :, :] * 255)
+                cv2.imwrite(file_name, img_gt)
+            for i in range(img_gen_length):
+                name = 'pd' + str(i + 1 + configs.input_length) + '.png'
+                file_name = os.path.join(path, name)
+                img_pd = img_gen[0, i, :, :, :]
+                img_pd = np.maximum(img_pd, 0)
+                img_pd = np.minimum(img_pd, 1)
+                img_pd = np.uint8(img_pd * 255)
+                cv2.imwrite(file_name, img_pd)
+
+    avg_mse = avg_mse / (batch_id * configs.batch_size)
+    print('mse per seq: ' + str(avg_mse))
+    for i in range(configs.total_length - configs.input_length):
+        print(img_mse[i] / (batch_id * configs.batch_size))
+
+    ssim = np.asarray(ssim, dtype=np.float32) / (configs.batch_size * batch_id)
+    print('ssim per frame: ' + str(np.mean(ssim)))
+    for i in range(configs.total_length - configs.input_length):
+        print(ssim[i])
+
+    psnr = np.asarray(psnr, dtype=np.float32) / batch_id
+    print('psnr per frame: ' + str(np.mean(psnr)))
+    for i in range(configs.total_length - configs.input_length):
+        print(psnr[i])
+
+    lp = np.asarray(lp, dtype=np.float32) / batch_id
+    print('lpips per frame: ' + str(np.mean(lp)))
+    for i in range(configs.total_length - configs.input_length):
+        print(lp[i])
 
 
 def cloud_cast_wrapper(model):
     from data.cloudcast import CloudCast
     import torch
     from tqdm import tqdm
+
     trainFolder = CloudCast(
         is_train=True,
         root="data/",
@@ -206,24 +317,55 @@ def cloud_cast_wrapper(model):
         n_frames_output=1,
         batchsize=8,
     )
+
     trainLoader = torch.utils.data.DataLoader(
         trainFolder, batch_size=8, num_workers=0, shuffle=False
     )
+
+    testFolder = CloudCast(
+        is_train=True,
+        root="data/",
+        n_frames_input=20,
+        n_frames_output=1,
+        batchsize=8,
+    )
+
+    testLoader = torch.utils.data.DataLoader(
+        testFolder, batch_size=8, num_workers=0, shuffle=False
+    )
+
     # device may need to change
     device = torch.device("gpu:0" if torch.cuda.is_available() else "cpu")
-    t = tqdm(trainLoader, leave=False, total=len(trainLoader))
+    t = tqdm(trainLoader, leave=False, total=2)
+    t_test = tqdm(testLoader, leave=False, total=2)
+
     for epoch in range(0, int(args.epochs)):
+        test(model, args, epoch)
+        train_loss = 0
         for i, (idx, targetVar, inputVar, _, _) in enumerate(t):
             inputs = inputVar.to(device)
             inputs = torch.swapaxes(inputs, 2, 4)
             if args.reverse_scheduled_sampling == 1:
                 real_input_flag = reserve_schedule_sampling_exp(i)
             ims = preprocess.reshape_patch(inputs, args.patch_size)
-            trainer.train(model, ims, real_input_flag, args, idx)
+            loss = model.train(ims, real_input_flag)
+            train_loss += loss.item()
+            #comet.log_metric("train_loss", train_loss / len(args.epoch), epoch=epoch)
+
+        for i, (idx, targetVar, inputVar, _, _) in enumerate(t_test):
+            inputs = inputVar.to(device)
+            inputs = torch.swapaxes(inputs, 2, 4)
+            pred = model(inputs)
+            #loss =
+
+
+
+
     if epoch % args.snapshot_interval == 0:
             model.save(epoch)
 
-#
+
+
 def test_wrapper(model):
     model.load(args.pretrained_model)
     test_input_handle = datasets_factory.data_provider(
@@ -250,6 +392,3 @@ eta = args.sampling_start_value
 if args.dataset_name == 'cloud_cast':
     print("Training cloud cast")
     cloud_cast_wrapper(model)
-# else:
-#     train_wrapper(model)
-
